@@ -12,7 +12,7 @@ def validate_token(credentials: HTTPAuthorizationCredentials = Security(_securit
     try:
         response = httpx.get(
             f"{AUTH_SERVICE_URL}/validate",
-            headers={"Authorization": f"Bearer {token}"},
+            params={"token": token},
             timeout=5.0,
         )
         if response.status_code == 401:

@@ -16,7 +16,7 @@ INSTANCE_ID = os.getenv("INSTANCE_ID", "booking-service")
 
 
 def _uid(user: dict) -> str:
-    return user.get("id") or user.get("userId") or user.get("sub") or ""
+    return user.get("user") or user.get("id") or user.get("userId") or user.get("sub") or ""
 
 
 # ── Cart ──────────────────────────────────────────────────────────────────────

@@ -1,37 +1,83 @@
-version: "3.8"
+name: software-architecture-project
+
+# ─────────────────────────────────────────────────────────────────────
+# Full stack: Traefik gateway + 4 microservices with their dependencies.
+#  - Auth        (FastAPI + Postgres + Redis JWT blacklist)
+#  - Catalog     (Node + MongoDB replica set, 3 nodes)
+#  - Booking     (FastAPI × 2 instances + Postgres + Redis cart + Kafka producer)
+#  - Payment     (Node + Postgres + Kafka consumer + PDF/QR + CQRS/ES)
+# ─────────────────────────────────────────────────────────────────────
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  auth-db-data:
+  mongo-primary-data:
+  mongo-secondary1-data:
+  mongo-secondary2-data:
+  booking-db-data:
+  payment-db-data:
 
 services:
+
+  # ───────────────────────── API Gateway ─────────────────────────
   traefik:
     image: traefik:v2.10
+    container_name: traefik
+    command:
+      - "--api.insecure=true"
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
     ports:
       - "80:80"
       - "8080:8080"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "./gateway/traefik.yml:/etc/traefik/traefik.yaml:ro"
     networks:
       - app-network
 
+  # ───────────────────────── Auth Service ────────────────────────
   auth-db:
-    image: postgres:15
+    image: postgres:15-alpine
+    container_name: auth-db
     environment:
       POSTGRES_DB: auth_db
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d auth_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   auth-redis:
     image: redis:7-alpine
+    container_name: auth-redis
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   auth-service:
     build: ./auth-service
+    container_name: auth-service
     depends_on:
-      - auth-db
-      - auth-redis
+      auth-db: { condition: service_healthy }
+      auth-redis: { condition: service_healthy }
     restart: on-failure
+    environment:
+      DATABASE_URL: postgresql://user:password@auth-db:5432/auth_db
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.auth.rule=PathPrefix(`/auth`)"
@@ -41,6 +87,261 @@ services:
     networks:
       - app-network
 
-networks:
-  app-network:
-    driver: bridge
+  # ──────────────────────── Catalog Service ──────────────────────
+  mongo-primary:
+    image: mongo:7.0
+    container_name: mongo-primary
+    hostname: mongo-primary
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    volumes:
+      - mongo-primary-data:/data/db
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  mongo-secondary1:
+    image: mongo:7.0
+    container_name: mongo-secondary1
+    hostname: mongo-secondary1
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    volumes:
+      - mongo-secondary1-data:/data/db
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  mongo-secondary2:
+    image: mongo:7.0
+    container_name: mongo-secondary2
+    hostname: mongo-secondary2
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    volumes:
+      - mongo-secondary2-data:/data/db
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  mongo-rs-init:
+    image: mongo:7.0
+    container_name: mongo-rs-init
+    depends_on:
+      mongo-primary: { condition: service_healthy }
+      mongo-secondary1: { condition: service_healthy }
+      mongo-secondary2: { condition: service_healthy }
+    networks:
+      - app-network
+    restart: "no"
+    command: >
+      mongosh --host mongo-primary:27017 --eval "
+        try {
+          var s = rs.status();
+          print('Replica set already initialized, state: ' + s.myState);
+        } catch(e) {
+          rs.initiate({
+            _id: 'rs0',
+            members: [
+              { _id: 0, host: 'mongo-primary:27017',    priority: 2, votes: 1 },
+              { _id: 1, host: 'mongo-secondary1:27017', priority: 1, votes: 1 },
+              { _id: 2, host: 'mongo-secondary2:27017', priority: 1, votes: 1 }
+            ]
+          });
+          print('Replica set initiated successfully');
+        }
+      "
+
+  catalog-service:
+    build:
+      context: ./catalog-service
+      dockerfile: Dockerfile
+    container_name: catalog-service
+    depends_on:
+      mongo-primary: { condition: service_healthy }
+      mongo-secondary1: { condition: service_healthy }
+      mongo-secondary2: { condition: service_healthy }
+    environment:
+      MONGO_URI: mongodb://mongo-primary:27017,mongo-secondary1:27017,mongo-secondary2:27017/catalogdb?replicaSet=rs0&readPreference=secondaryPreferred
+      PORT: 3001
+      SERVICE_NAME: catalog-service
+    networks:
+      - app-network
+    restart: on-failure
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.catalog.rule=PathPrefix(`/catalog`)"
+      - "traefik.http.middlewares.catalog-stripprefix.stripprefix.prefixes=/catalog"
+      - "traefik.http.routers.catalog.middlewares=catalog-stripprefix"
+      - "traefik.http.services.catalog.loadbalancer.server.port=3001"
+
+  # ──────────────────────── Booking Service ──────────────────────
+  postgres-booking:
+    image: postgres:15-alpine
+    container_name: postgres-booking
+    environment:
+      POSTGRES_DB: bookingdb
+      POSTGRES_USER: booking_user
+      POSTGRES_PASSWORD: booking_pass
+    volumes:
+      - booking-db-data:/var/lib/postgresql/data
+      - ./booking-service/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booking_user -d bookingdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  booking-service-1: &booking-service
+    build: ./booking-service
+    container_name: booking-service-1
+    depends_on:
+      postgres-booking: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_started }
+      auth-service: { condition: service_started }
+      catalog-service: { condition: service_started }
+    environment:
+      INSTANCE_ID: booking-service-1
+      PORT: 3000
+      DB_HOST: postgres-booking
+      DB_PORT: 5432
+      DB_NAME: bookingdb
+      DB_USER: booking_user
+      DB_PASSWORD: booking_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BROKERS: kafka:9092
+      AUTH_SERVICE_URL: http://auth-service:8000
+      CATALOG_SERVICE_URL: http://catalog-service:3001
+    networks:
+      - app-network
+    restart: on-failure
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.booking.rule=PathPrefix(`/booking`)"
+      - "traefik.http.middlewares.booking-stripprefix.stripprefix.prefixes=/booking"
+      - "traefik.http.routers.booking.middlewares=booking-stripprefix"
+      - "traefik.http.services.booking.loadbalancer.server.port=3000"
+
+  booking-service-2:
+    <<: *booking-service
+    container_name: booking-service-2
+    environment:
+      INSTANCE_ID: booking-service-2
+      PORT: 3000
+      DB_HOST: postgres-booking
+      DB_PORT: 5432
+      DB_NAME: bookingdb
+      DB_USER: booking_user
+      DB_PASSWORD: booking_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BROKERS: kafka:9092
+      AUTH_SERVICE_URL: http://auth-service:8000
+      CATALOG_SERVICE_URL: http://catalog-service:3001
+
+  # ─────────────────────────── Kafka ─────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - app-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "29092:29092"
+    networks:
+      - app-network
+
+  # ─────────────────── Payment & Ticketing Service ───────────────
+  postgres-payment:
+    image: postgres:15-alpine
+    container_name: postgres-payment
+    environment:
+      POSTGRES_DB: paymentdb
+      POSTGRES_USER: payment_user
+      POSTGRES_PASSWORD: payment_pass
+    volumes:
+      - payment-db-data:/var/lib/postgresql/data
+      - ./payment-service/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_user -d paymentdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  payment-service:
+    build: ./payment-service
+    container_name: payment-service
+    depends_on:
+      postgres-payment: { condition: service_healthy }
+      kafka: { condition: service_started }
+      auth-service: { condition: service_started }
+    environment:
+      PORT: 3003
+      SERVICE_NAME: payment-service
+      DB_HOST: postgres-payment
+      DB_PORT: 5432
+      DB_NAME: paymentdb
+      DB_USER: payment_user
+      DB_PASSWORD: payment_pass
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_GROUP_ID: payment-ticketing-service
+      KAFKA_TOPIC_RESERVE: ReserveTicketCommand
+      KAFKA_TOPIC_TICKET: TicketGeneratedEvent
+      KAFKA_TOPIC_PAYMENT: PaymentProcessedEvent
+      AUTH_SERVICE_URL: http://auth-service:8000
+      PAYMENT_FAIL_RATE: "0"
+    networks:
+      - app-network
+    restart: on-failure
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.payment.rule=PathPrefix(`/payment`)"
+      - "traefik.http.middlewares.payment-stripprefix.stripprefix.prefixes=/payment"
+      - "traefik.http.routers.payment.middlewares=payment-stripprefix"
+      - "traefik.http.services.payment.loadbalancer.server.port=3003"

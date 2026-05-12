@@ -19,9 +19,24 @@ async function connectWithRetry(attempt = 1) {
 
 function isReadOnlyError(err) {
   if (!err) return false;
+  // Mongo server errors that mean "this node can't accept writes"
   const codes = [10107, 13435, 11600, 91];
-  const msgs = ['not primary', 'NotWritablePrimary', 'no primary', 'no suitable servers'];
-  return codes.includes(err.code) || msgs.some(m => err.message?.toLowerCase().includes(m.toLowerCase()));
+  const msgs = [
+    'not primary',
+    'notwritableprimary',
+    'no primary',
+    'no suitable servers',
+    'server selection timed out',
+    'getaddrinfo enotfound',
+    'econnrefused',
+    'enotfound',
+  ];
+  // Node-level network errors (DNS / connection) when the configured host is gone
+  if (['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ETIMEDOUT'].includes(err.code)) return true;
+  if (err.name === 'MongooseServerSelectionError' || err.name === 'MongoServerSelectionError') return true;
+  if (codes.includes(err.code)) return true;
+  const m = (err.message || '').toLowerCase();
+  return msgs.some((s) => m.includes(s));
 }
 
 module.exports = { connectWithRetry, isReadOnlyError };

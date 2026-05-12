@@ -1,0 +1,25 @@
+{
+  "name": "payment-service",
+  "version": "1.0.0",
+  "description": "Payment & Ticketing Service — CQRS + Event Sourcing, Kafka consumer, PDF/QR ticket generation",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "replay": "node src/scripts/replay.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "pg": "^8.11.3",
+    "kafkajs": "^2.2.4",
+    "pdfkit": "^0.14.0",
+    "qrcode": "^1.5.3",
+    "axios": "^1.6.2",
+    "morgan": "^1.10.0",
+    "uuid": "^9.0.1",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

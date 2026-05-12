@@ -1,11 +1,15 @@
 from fastapi import FastAPI, Depends, HTTPException, Header
 import redis
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 import time
+import logging
 from sqlalchemy.exc import OperationalError
 from fastapi.security import OAuth2PasswordBearer
 
 from . import auth_utils, models, schemas, database
+
+logger = logging.getLogger("auth")
 
 app = FastAPI(
     title="Auth Service",
@@ -42,21 +46,33 @@ def login(user: schemas.UserLogin, db: Session = Depends(database.get_db)):
         raise HTTPException(status_code=401, detail="Wrong credentials")
     
     token = auth_utils.create_access_token({"sub": db_user.email})
-    cache.set(f"active_{token}", "true", ex=3600)
+    try:
+        cache.set(f"active_{token}", "true", ex=3600)
+    except RedisError as exc:
+        logger.warning("Redis unavailable on login, issuing token without active-cache: %s", exc)
     return {"access_token": token}
 
 @app.post("/logout")
 def logout(authorization: str = Header(None)):
     token = authorization.replace("Bearer ", "")
-    cache.delete(f"active_{token}")
-    cache.set(f"bl_{token}", "true", ex=3600)
+    try:
+        cache.delete(f"active_{token}")
+        cache.set(f"bl_{token}", "true", ex=3600)
+    except RedisError as exc:
+        logger.warning("Redis unavailable on logout, blacklist not written: %s", exc)
+        raise HTTPException(status_code=503, detail="Logout unavailable: cache down")
     return {"message": "Logged out"}
 
 @app.get("/validate")
 def validate(token: str):
-    if cache.get(f"bl_{token}"):
-        raise HTTPException(status_code=401, detail="Token blacklisted")
-    
+    # Blacklist check is best-effort: if Redis is down, fall through to JWT-only
+    # validation. The spec calls for graceful degradation here.
+    try:
+        if cache.get(f"bl_{token}"):
+            raise HTTPException(status_code=401, detail="Token blacklisted")
+    except RedisError as exc:
+        logger.warning("Redis unavailable on validate, skipping blacklist check: %s", exc)
+
     try:
         payload = auth_utils.jwt.decode(token, auth_utils.SECRET_KEY, algorithms=[auth_utils.ALGORITHM])
         return {"status": "valid", "user": payload.get("sub")}

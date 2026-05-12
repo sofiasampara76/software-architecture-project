@@ -1,0 +1,153 @@
+{
+  "info": {
+    "name": "UCU APZ — Microservices E2E",
+    "_postman_id": "ucu-apz-microservices-e2e",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "End-to-end flow via Traefik gateway: auth -> catalog -> booking -> payment.\nSet the {{gateway}} variable to http://localhost (default)."
+  },
+  "variable": [
+    { "key": "gateway",  "value": "http://localhost" },
+    { "key": "email",    "value": "demo@apzdemo.com" },
+    { "key": "password", "value": "demo-pass-1" },
+    { "key": "token",    "value": "" },
+    { "key": "eventId",  "value": "" },
+    { "key": "bookingId","value": "" }
+  ],
+  "item": [
+    {
+      "name": "Auth — Register",
+      "request": {
+        "method": "POST",
+        "url": "{{gateway}}/auth/register",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" }
+      }
+    },
+    {
+      "name": "Auth — Login",
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "const json = pm.response.json();",
+          "if (json.access_token) pm.collectionVariables.set('token', json.access_token);"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "url": "{{gateway}}/auth/login",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" }
+      }
+    },
+    {
+      "name": "Auth — Validate",
+      "request": {
+        "method": "GET",
+        "url": "{{gateway}}/auth/validate?token={{token}}"
+      }
+    },
+    {
+      "name": "Catalog — Create Event",
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "const json = pm.response.json();",
+          "if (json._id) pm.collectionVariables.set('eventId', json._id);"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "url": "{{gateway}}/catalog/events",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"title\": \"APZ Demo Concert\",\n  \"description\": \"Resilient gig\",\n  \"date\": \"2026-12-01T18:00:00Z\",\n  \"totalSeats\": 100,\n  \"availableSeats\": 100,\n  \"price\": 20,\n  \"category\": \"concert\"\n}" }
+      }
+    },
+    {
+      "name": "Catalog — List Events",
+      "request": { "method": "GET", "url": "{{gateway}}/catalog/events" }
+    },
+    {
+      "name": "Catalog — Get Event",
+      "request": { "method": "GET", "url": "{{gateway}}/catalog/events/{{eventId}}" }
+    },
+    {
+      "name": "Booking — Add to Cart",
+      "request": {
+        "method": "POST",
+        "url": "{{gateway}}/booking/cart/items",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 2\n}" }
+      }
+    },
+    {
+      "name": "Booking — Get Cart",
+      "request": {
+        "method": "GET",
+        "url": "{{gateway}}/booking/cart",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+      }
+    },
+    {
+      "name": "Booking — Checkout (produces ReserveTicketCommand)",
+      "event": [{
+        "listen": "test",
+        "script": { "type": "text/javascript", "exec": [
+          "const json = pm.response.json();",
+          "if (json.id) pm.collectionVariables.set('bookingId', json.id);"
+        ]}
+      }],
+      "request": {
+        "method": "POST",
+        "url": "{{gateway}}/booking/bookings",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "body": { "mode": "raw", "raw": "{\n  \"eventId\": \"{{eventId}}\",\n  \"quantity\": 2,\n  \"totalSeats\": 100\n}" }
+      }
+    },
+    {
+      "name": "Payment — My Tickets (wait a few seconds first)",
+      "request": {
+        "method": "GET",
+        "url": "{{gateway}}/payment/tickets/me",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+      }
+    },
+    {
+      "name": "Payment — Ticket by Booking ID",
+      "request": {
+        "method": "GET",
+        "url": "{{gateway}}/payment/tickets/{{bookingId}}",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+      }
+    },
+    {
+      "name": "Payment — Download Ticket PDF",
+      "request": {
+        "method": "GET",
+        "url": "{{gateway}}/payment/tickets/{{bookingId}}/pdf",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+      }
+    },
+    {
+      "name": "Payment — Event Log (Event Sourcing)",
+      "request": { "method": "GET", "url": "{{gateway}}/payment/events?limit=50" }
+    },
+    {
+      "name": "Payment — Replay Read Model",
+      "request": { "method": "POST", "url": "{{gateway}}/payment/admin/replay" }
+    },
+    {
+      "name": "Auth — Logout (blacklist token)",
+      "request": {
+        "method": "POST",
+        "url": "{{gateway}}/auth/logout",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }]
+      }
+    }
+  ]
+}

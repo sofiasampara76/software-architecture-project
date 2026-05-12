@@ -1,3 +1,14 @@
+# Reference Traefik static config.
+# In the root docker-compose.yml we configure Traefik through CLI flags +
+# Docker provider labels on each service, so this file is for reference only.
+# Routes (see service labels):
+#   /auth/*    → auth-service:8000     (FastAPI)
+#   /catalog/* → catalog-service:3001  (Node)
+#   /booking/* → booking-service:3000  (FastAPI × 2, Round-Robin)
+#   /payment/* → payment-service:3003  (Node)
+#
+# Traefik dashboard: http://localhost:8080
+
 api:
   insecure: true
   dashboard: true
