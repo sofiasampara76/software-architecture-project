@@ -109,6 +109,19 @@ docker exec -it postgres-payment psql -U payment_user -d paymentdb \
 | `GET  /payment/events` | Append-only event log (Event Sourcing) |
 | `POST /payment/admin/replay` | Rebuild the `tickets` read model from the event log |
 
+### Optional: protected catalog writes
+
+Catalog ships with a JWT auth middleware (`catalog-service/src/middleware/auth.js`)
+that delegates to `auth-service/validate`. It is **opt-in** — disabled by default
+to keep the demo path simple. To turn it on:
+
+1. In `docker-compose.yml`, add `AUTH_REQUIRED: "true"` to the `catalog-service` `environment:` block.
+2. Apply the middleware in `catalog-service/src/routes/events.js` (e.g. `router.post('/', authMiddleware, ...)`).
+3. Rebuild: `docker compose up -d --build catalog-service`.
+
+After that, write endpoints (`POST/PATCH/DELETE /catalog/events`) require
+`Authorization: Bearer <token>`; reads stay public.
+
 ## Repository layout
 
 ```
