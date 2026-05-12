@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+  traefik:
+    image: traefik:v2.10
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./gateway/traefik.yml:/etc/traefik/traefik.yaml:ro"
+    networks:
+      - app-network
+
+  auth-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: auth_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    networks:
+      - app-network
+
+  auth-redis:
+    image: redis:7-alpine
+    networks:
+      - app-network
+
+  auth-service:
+    build: ./auth-service
+    depends_on:
+      - auth-db
+      - auth-redis
+    restart: on-failure
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.auth.rule=PathPrefix(`/auth`)"
+      - "traefik.http.middlewares.auth-stripprefix.stripprefix.prefixes=/auth"
+      - "traefik.http.routers.auth.middlewares=auth-stripprefix"
+      - "traefik.http.services.auth.loadbalancer.server.port=8000"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
