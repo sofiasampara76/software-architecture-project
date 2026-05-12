@@ -1,0 +1,130 @@
+# ─────────────────────────────────────────────────────────────────
+# Catalog Service — standalone docker-compose
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  catalog-net:
+    driver: bridge
+
+services:
+
+  mongo-primary:
+    image: mongo:7.0
+    container_name: mongo-primary
+    hostname: mongo-primary
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-primary-data:/data/db
+    networks:
+      - catalog-net
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  mongo-secondary1:
+    image: mongo:7.0
+    container_name: mongo-secondary1
+    hostname: mongo-secondary1
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-secondary1-data:/data/db
+    networks:
+      - catalog-net
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  mongo-secondary2:
+    image: mongo:7.0
+    container_name: mongo-secondary2
+    hostname: mongo-secondary2
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo-secondary2-data:/data/db
+    networks:
+      - catalog-net
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  mongo-rs-init:
+    image: mongo:7.0
+    container_name: mongo-rs-init
+    depends_on:
+      mongo-primary:
+        condition: service_healthy
+      mongo-secondary1:
+        condition: service_healthy
+      mongo-secondary2:
+        condition: service_healthy
+    networks:
+      - catalog-net
+    command: >
+      mongosh --host mongo-primary:27017 --eval "
+        try {
+          var s = rs.status();
+          print('Replica set already initialized, state: ' + s.myState);
+        } catch(e) {
+          rs.initiate({
+            _id: 'rs0',
+            members: [
+              { _id: 0, host: 'mongo-primary:27017',    priority: 2, votes: 1 },
+              { _id: 1, host: 'mongo-secondary1:27017', priority: 1, votes: 1 },
+              { _id: 2, host: 'mongo-secondary2:27017', priority: 1, votes: 1 }
+            ]
+          });
+          print('Replica set initiated successfully');
+        }
+      "
+    restart: "no"
+
+  catalog-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: catalog-service
+    depends_on:
+      mongo-primary:
+        condition: service_healthy
+      mongo-secondary1:
+        condition: service_healthy
+      mongo-secondary2:
+        condition: service_healthy
+    environment:
+      MONGO_URI: mongodb://mongo-primary:27017,mongo-secondary1:27017,mongo-secondary2:27017/catalogdb?replicaSet=rs0&readPreference=secondaryPreferred
+      PORT: 3001
+      SERVICE_NAME: catalog-service
+    ports:
+      - "3001:3001"
+    networks:
+      - catalog-net
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  mongo-primary-data:
+  mongo-secondary1-data:
+  mongo-secondary2-data:
