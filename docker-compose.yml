@@ -78,6 +78,9 @@ services:
     restart: on-failure
     environment:
       DATABASE_URL: postgresql://user:password@auth-db:5432/auth_db
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-please}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_MINUTES: 60
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.auth.rule=PathPrefix(`/auth`)"
