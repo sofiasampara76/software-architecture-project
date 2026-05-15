@@ -6,25 +6,7 @@ all behind a Traefik API Gateway.
 
 ## Architecture
 
-```
-                    ┌──────────────┐
-                    │   Traefik    │  :80 (gateway), :8080 (dashboard)
-                    └──────┬───────┘
-        ┌────────────┬─────┴────────┬──────────────────┐
-        │            │              │                  │
-   /auth/*      /catalog/*     /booking/*          /payment/*
-        │            │              │                  │
- ┌──────▼─────┐ ┌────▼─────────┐ ┌──▼─────────────┐ ┌──▼──────────────┐
- │ Auth (Py)  │ │ Catalog (JS) │ │ Booking (Py)×2 │ │ Payment (JS)    │
- │ Postgres   │ │ MongoDB RS×3 │ │ Postgres+Redis │ │ Postgres        │
- │ Redis (BL) │ │              │ │ Kafka producer │ │ Kafka consumer  │
- └────────────┘ └──────────────┘ └────────┬───────┘ └────────▲────────┘
-                                          │ ReserveTicketCommand    │
-                                          └──── Kafka ──────────────┘
-                                                  │
-                                          TicketGeneratedEvent
-                                          PaymentProcessedEvent
-```
+![architecture_scheme](architecture.png)
 
 | Service | Stack | DB | Reliability story |
 |---|---|---|---|
