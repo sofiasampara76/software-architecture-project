@@ -1,4 +1,4 @@
-# UCU APZ — Event Booking Microservices
+# Event Booking Microservices
 
 End-to-end demo of a resilient microservices system: registration, event
 catalog, cart/booking and asynchronous payment + PDF/QR ticket generation,
