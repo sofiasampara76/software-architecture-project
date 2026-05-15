@@ -6,7 +6,7 @@ all behind a Traefik API Gateway.
 
 ## Architecture
 
-![architecture_scheme](architecture.png)
+![architecture_scheme](architecture.svg)
 
 | Service | Stack | DB | Reliability story |
 |---|---|---|---|
